@@ -18,7 +18,6 @@
 #include "liblitepcie.h"
 
 #define DMA_CHECK_DATA
-#define DMA_RANDOM_DATA
 
 static char litepcie_device[1024];
 static int litepcie_device_num;
@@ -212,14 +211,6 @@ static void flash_reload(void)
 
 /* dma */
 
-static inline int64_t add_mod_int(int64_t a, int64_t b, int64_t m)
-{
-    a += b;
-    if (a >= m)
-        a -= m;
-    return a;
-}
-
 static int get_next_pow2(int data_width)
 {
     int x = 1;
@@ -229,15 +220,6 @@ static int get_next_pow2(int data_width)
 }
 
 #ifdef DMA_CHECK_DATA
-static inline uint32_t seed_to_data(uint32_t seed)
-{
-#ifdef DMA_RANDOM_DATA
-    return seed * 69069 + 1;
-#else
-    return seed;
-#endif
-}
-
 static uint32_t get_data_mask(int data_width)
 {
     int i;
@@ -252,33 +234,26 @@ static uint32_t get_data_mask(int data_width)
 
 static void write_pn_data(uint32_t *buf, int count, uint32_t *pseed, int data_width)
 {
-    int i;
     uint32_t seed;
     uint32_t mask = get_data_mask(data_width);
 
     seed = *pseed;
-    for(i = 0; i < count; i++) {
-        buf[i] = (seed_to_data(seed) & mask);
-        seed = add_mod_int(seed, 1, DMA_BUFFER_SIZE / sizeof(uint32_t));
-    }
-    *pseed = seed;
+    while (count--)
+        *buf++ = (seed + count) & mask;
+    *pseed = (seed + (seed << 16) + 1) * 17;
 }
 
 static int check_pn_data(const uint32_t *buf, int count, uint32_t *pseed, int data_width)
 {
-    int i, errors;
+    int errors;
     uint32_t seed;
     uint32_t mask = get_data_mask(data_width);
 
     errors = 0;
     seed = *pseed;
-    for (i = 0; i < count; i++) {
-        if (buf[i] != (seed_to_data(seed) & mask)) {
-            errors ++;
-        }
-        seed = add_mod_int(seed, 1, DMA_BUFFER_SIZE / sizeof(uint32_t));
-    }
-    *pseed = seed;
+    while (count--)
+        errors += *buf++ != ((seed + count) & mask);
+    *pseed = (seed + (seed << 16) + 1) * 17;
     return errors;
 }
 #endif
