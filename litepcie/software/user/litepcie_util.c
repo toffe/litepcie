@@ -17,7 +17,7 @@
 #include <signal.h>
 #include "liblitepcie.h"
 
-#define DMA_CHECK_DATA
+//#define DMA_CHECK_DATA
 
 static char litepcie_device[1024];
 static int litepcie_device_num;
@@ -272,6 +272,7 @@ static void dma_test(uint8_t zero_copy, uint8_t external_loopback, int data_widt
 
     /* stats */
     int i = 0;
+    int time_count = 0;
     int64_t reader_sw_count_last = 0;
     int64_t last_time;
     uint32_t errors = 0;
@@ -291,6 +292,7 @@ static void dma_test(uint8_t zero_copy, uint8_t external_loopback, int data_widt
 
     /* test loop */
     last_time = get_time_ms();
+
     for (;;) {
         /* exit loop on ctrl+c pressed */
         if (!keep_running)
@@ -356,7 +358,10 @@ static void dma_test(uint8_t zero_copy, uint8_t external_loopback, int data_widt
         }
 
         /* statistics */
-        int64_t duration = get_time_ms() - last_time;
+        int64_t duration = 0;
+        if (time_count++ % 64)
+            duration = get_time_ms() - last_time;
+
         if (run & (duration > 200)) {
             if (i % 10 == 0)
                 printf("\e[1mDMA_SPEED(Gbps)\tTX_BUFFERS\tRX_BUFFERS\tDIFF\tERRORS\e[0m\n");

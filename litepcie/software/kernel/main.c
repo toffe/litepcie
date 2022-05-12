@@ -601,6 +601,8 @@ static ssize_t litepcie_read(struct file *file, char __user *data, size_t size, 
 	struct litepcie_chan *chan = chan_priv->chan;
 	struct litepcie_device *s = chan->litepcie_dev;
 
+	litepcie_check_writer(s, chan); /* update RX dma info from HW */
+
 	if (chan->dma.writer_hw_count == chan->dma.writer_sw_count) {
 		if (file->f_flags & O_NONBLOCK) {
 			return -EAGAIN;
@@ -903,6 +905,8 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 
 		chan->dma.writer_enable = m.enable;
 
+		litepcie_check_writer(s, chan); /* update RX dma info from HW */
+
 		m.hw_count = chan->dma.writer_hw_count;
 		m.sw_count = chan->dma.writer_sw_count;
 
@@ -934,6 +938,8 @@ static long litepcie_ioctl(struct file *file, unsigned int cmd,
 		}
 
 		chan->dma.reader_enable = m.enable;
+
+		litepcie_check_reader(s, chan); /* update TX dma info from HW */
 
 		m.hw_count = chan->dma.reader_hw_count;
 		m.sw_count = chan->dma.reader_sw_count;
