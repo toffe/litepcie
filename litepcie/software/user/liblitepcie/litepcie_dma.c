@@ -16,8 +16,6 @@
 #include "litepcie_dma.h"
 #include "litepcie_helpers.h"
 
-#define USE_POLL 1
-
 void litepcie_dma_set_loopback(int fd, uint8_t loopback_enable) {
     struct litepcie_ioctl_dma m;
     m.loopback_enable = loopback_enable;
@@ -161,37 +159,45 @@ void litepcie_dma_cleanup(struct litepcie_dma_ctrl *dma)
 
 void litepcie_dma_process(struct litepcie_dma_ctrl *dma)
 {
-    ssize_t len;
 
-#ifdef USE_POLL
-    int ret;
+    if (dma->zero_copy) {
 
-    /* polling */
-    ret = poll(&dma->fds, 1, 100);
-    if (poll < 0) {
-        perror("poll");
-        return;
-    } else if (ret == 0) {
-        printf("poll timeout\n");
-        /* timeout */
-        return;
-    }
-#endif
+        /* RX */
+        /* update dma sw_count*/
+        dma->mmap_dma_update.sw_count = dma->writer_sw_count;
+        checked_ioctl(dma->fds.fd, LITEPCIE_IOCTL_MMAP_DMA_WRITER_UPDATE, &dma->mmap_dma_update);
 
-    /* read event */
-#ifdef USE_POLL
-    if (dma->fds.revents & POLLIN) {
-#endif
-        if (dma->zero_copy) {
-            /* update dma sw_count*/
-            dma->mmap_dma_update.sw_count = dma->writer_sw_count;
-            checked_ioctl(dma->fds.fd, LITEPCIE_IOCTL_MMAP_DMA_WRITER_UPDATE, &dma->mmap_dma_update);
+        /* count available buffers */
+        litepcie_dma_writer(dma->fds.fd, 1, &dma->writer_hw_count, &dma->writer_sw_count);
+        dma->buffers_available_read = dma->writer_hw_count - dma->writer_sw_count;
+        dma->usr_read_buf_offset = dma->writer_sw_count % DMA_BUFFER_COUNT;
 
-            /* count available buffers */
-            litepcie_dma_writer(dma->fds.fd, 1, &dma->writer_hw_count, &dma->writer_sw_count);
-            dma->buffers_available_read = dma->writer_hw_count - dma->writer_sw_count;
-            dma->usr_read_buf_offset = dma->writer_sw_count % DMA_BUFFER_COUNT;
-        } else {
+        /* TX */
+        /* update dma sw_count */
+        dma->mmap_dma_update.sw_count = dma->reader_sw_count;
+        checked_ioctl(dma->fds.fd, LITEPCIE_IOCTL_MMAP_DMA_READER_UPDATE, &dma->mmap_dma_update);
+
+        /* count available buffers */
+        litepcie_dma_reader(dma->fds.fd, 1, &dma->reader_hw_count, &dma->reader_sw_count);
+        dma->buffers_available_write = DMA_BUFFER_COUNT - (dma->reader_sw_count - dma->reader_hw_count);
+        dma->usr_write_buf_offset = dma->reader_sw_count % DMA_BUFFER_COUNT;
+
+    } else {
+        ssize_t len;
+        int ret;
+        /* polling */
+        ret = poll(&dma->fds, 1, 100);
+        if (poll < 0) {
+            perror("poll");
+            return;
+        } else if (ret == 0) {
+            printf("poll timeout\n");
+            /* timeout */
+            return;
+        }
+
+        /* read event */
+        if (dma->fds.revents & POLLIN) {
             len = read(dma->fds.fd, dma->buf_rd, DMA_BUFFER_TOTAL_SIZE);
             if (len < 0) {
                 perror("read");
@@ -199,48 +205,37 @@ void litepcie_dma_process(struct litepcie_dma_ctrl *dma)
             }
             dma->buffers_available_read = len / DMA_BUFFER_SIZE;
             dma->usr_read_buf_offset = 0;
-        }
-#ifdef USE_POLL
-    } else {
-        dma->buffers_available_read = 0;
-    }
-    /* write event */
-    if (dma->fds.revents & POLLOUT) {
-#endif
-        if (dma->zero_copy) {
-            /* update dma sw_count */
-            dma->mmap_dma_update.sw_count = dma->reader_sw_count;
-            checked_ioctl(dma->fds.fd, LITEPCIE_IOCTL_MMAP_DMA_READER_UPDATE, &dma->mmap_dma_update);
-
-            /* count available buffers */
-            litepcie_dma_reader(dma->fds.fd, 1, &dma->reader_hw_count, &dma->reader_sw_count);
-            dma->buffers_available_write = DMA_BUFFER_COUNT - (dma->reader_sw_count - dma->reader_hw_count);
-            dma->usr_write_buf_offset = dma->reader_sw_count % DMA_BUFFER_COUNT;
-
         } else {
-            int wlen = (DMA_BUFFER_COUNT - dma->buffers_available_write) * DMA_BUFFER_SIZE;
-            int used = 0;
-
-            if (wlen > 0) {
-                len = write(dma->fds.fd, dma->buf_wr, wlen);
-                if (len < 0) {
-                    perror("write");
-                    abort();
-                }
-                if (len < wlen) {
-                    used = (wlen - len) / DMA_BUFFER_SIZE;
-                    memmove(dma->buf_wr, dma->buf_wr + len, DMA_BUFFER_SIZE * used);
-                }
-            }
-
-            dma->buffers_available_write = DMA_BUFFER_COUNT - used;
-            dma->usr_write_buf_offset    = used;
+            dma->buffers_available_read = 0;
         }
-#ifdef USE_POLL
-    } else {
-        dma->buffers_available_write = 0;
+
+        /* write event */
+        if (dma->fds.revents & POLLOUT) {
+            if (dma->zero_copy) {
+
+            } else {
+                int wlen = (DMA_BUFFER_COUNT - dma->buffers_available_write) * DMA_BUFFER_SIZE;
+                int used = 0;
+
+                if (wlen > 0) {
+                    len = write(dma->fds.fd, dma->buf_wr, wlen);
+                    if (len < 0) {
+                        perror("write");
+                        abort();
+                    }
+                    if (len < wlen) {
+                        used = (wlen - len) / DMA_BUFFER_SIZE;
+                        memmove(dma->buf_wr, dma->buf_wr + len, DMA_BUFFER_SIZE * used);
+                    }
+                }
+
+                dma->buffers_available_write = DMA_BUFFER_COUNT - used;
+                dma->usr_write_buf_offset    = used;
+            }
+        } else {
+            dma->buffers_available_write = 0;
+        }
     }
-#endif
 }
 
 char *litepcie_dma_next_read_buffer(struct litepcie_dma_ctrl *dma)
